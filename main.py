@@ -2,6 +2,7 @@
 from flask import Flask, request, jsonify, render_template
 import os
 import datetime
+from datetime import timezone, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -126,6 +127,31 @@ def handle_message(session_id, incoming_msg):
         if incoming_msg in ["1", "2", "3", "4"]:
             date_choice = current_state.split("_")[-1] # Bir önceki adımda sakladığımız gün (1, 2 veya 3)
             
+            # --- GEÇMİŞ ZAMAN KONTROLÜ BAŞLANGICI ---
+            today = datetime.date.today()
+            if date_choice == "1":
+                target_date = today
+            elif date_choice == "2":
+                target_date = today + datetime.timedelta(days=1)
+            elif date_choice == "3":
+                target_date = today + datetime.timedelta(days=2)
+                
+            time_mapping = {"1": "10:00:00", "2": "13:00:00", "3": "15:00:00", "4": "17:00:00"}
+            target_time_str = time_mapping[incoming_msg]
+            
+            # Türkiye Saati'ni (UTC+3) ayarla
+            tz_tr = timezone(timedelta(hours=3))
+            now_tr = datetime.datetime.now(tz_tr) # Şu anki Türkiye saati
+            
+            # Müşterinin seçtiği tarihi ve saati birleştirip Türkiye saatine çeviriyoruz
+            target_dt = datetime.datetime.strptime(f"{target_date} {target_time_str}", "%Y-%m-%d %H:%M:%S")
+            target_dt = target_dt.replace(tzinfo=tz_tr)
+            
+            # EĞER SEÇİLEN ZAMAN ŞU ANDAN KÜÇÜKSE (GEÇMİŞTEYSE) İZİN VERME!
+            if target_dt < now_tr:
+                return f"❌ Hata: Seçtiğiniz saat ({target_time_str[:5]}) geçmişte kaldı! Lütfen ileri bir saat seçin.\n\n" + TIME_MENU
+            # --- GEÇMİŞ ZAMAN KONTROLÜ BİTİŞİ ---
+
             # Google Calendar'a ekle!
             success = create_calendar_event(date_choice, incoming_msg, session_id)
             
