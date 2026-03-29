@@ -1,12 +1,20 @@
-# import antigravity  # LeadNova uçuşa hazır! 🚀 (Commented out to prevent browser pop-ups)
-print("LeadNova uçuşa hazır! 🚀")
-
+# LeadNova uçuşa hazır! 🚀
 from flask import Flask, request, jsonify, render_template
 import os
+import datetime
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 app = Flask(__name__)
 
-# --- BOT MANTIĞI ---
+# --- GOOGLE TAKVİM AYARLARI ---
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+CREDENTIALS_FILE = 'service_account.json'
+# Eğer yukarıdaki adımlarda botu kendi ana takviminle paylaştıysan 'primary' yerine kendi Gmail adresini yazmalısın. 
+# (Örn: 'leadnova@gmail.com')
+CALENDAR_ID = 'primary' 
+
+# Kullanıcı durumları
 user_states = {}
 
 MAIN_MENU = """*LeadNova System’e hoş geldiniz!* 🚀
@@ -28,7 +36,6 @@ SUB_MENUS = {
     "6": "Bahis Sitesi Kurulum ve Analiz Sistemine Hoş Geldiniz. Detaylar için uzman ekibimize aktarılıyorsunuz..."
 }
 
-# --- YENİ EKLENEN RANDEVU SEÇENEKLERİ ---
 DATE_MENU = """Lütfen randevu gününü seçin:
 1️⃣ Bugün
 2️⃣ Yarın
@@ -39,6 +46,49 @@ TIME_MENU = """Lütfen randevu saatini seçin:
 2️⃣ 13:00
 3️⃣ 15:00
 4️⃣ 17:00"""
+
+def create_calendar_event(date_choice, time_choice, session_id):
+    try:
+        # Tarihi hesapla
+        today = datetime.date.today()
+        if date_choice == "1":
+            target_date = today
+        elif date_choice == "2":
+            target_date = today + datetime.timedelta(days=1)
+        elif date_choice == "3":
+            target_date = today + datetime.timedelta(days=2)
+            
+        # Saati belirle
+        time_mapping = {"1": "10:00:00", "2": "13:00:00", "3": "15:00:00", "4": "17:00:00"}
+        target_time = time_mapping[time_choice]
+        
+        start_datetime = f"{target_date}T{target_time}+03:00" # Türkiye saati
+        
+        # Bitiş saati (1 saat sonrası)
+        start_dt = datetime.datetime.strptime(f"{target_date} {target_time}", "%Y-%m-%d %H:%M:%S")
+        end_dt = start_dt + datetime.timedelta(hours=1)
+        end_datetime = f"{end_dt.strftime('%Y-%m-%d')}T{end_dt.strftime('%H:%M:%S')}+03:00"
+
+        # API Bağlantısı
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+        service = build('calendar', 'v3', credentials=creds)
+        
+        event = {
+            'summary': f'Müşteri Randevusu ({session_id})',
+            'description': 'LeadNova Otomasyon Sisteminden alındı.',
+            'start': {'dateTime': start_datetime, 'timeZone': 'Europe/Istanbul'},
+            'end': {'dateTime': end_datetime, 'timeZone': 'Europe/Istanbul'},
+            'reminders': {
+                'useDefault': False,
+                'overrides': [{'method': 'popup', 'minutes': 15}],
+            },
+        }
+        
+        service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+        return True
+    except Exception as e:
+        print(f"Takvim oluşturma hatası: {e}")
+        return False
 
 def handle_message(session_id, incoming_msg):
     # Kullanıcı ilk defa yazıyorsa veya "menü" yazdıysa
@@ -62,25 +112,30 @@ def handle_message(session_id, incoming_msg):
             user_states[session_id] = "SELECT_DATE"
             return DATE_MENU
 
-    # ---------------- YENİ EKLENEN RANDEVU AKIŞI ----------------
-
     # Kullanıcı gün seçimi yapıyorsa
     if current_state == "SELECT_DATE":
         if incoming_msg in ["1", "2", "3"]:
-            user_states[session_id] = "SELECT_TIME"
+            # Seçilen günü state içinde tutuyoruz ki bir sonraki adımda hatırlayalım
+            user_states[session_id] = f"SELECT_TIME_{incoming_msg}"
             return TIME_MENU
         else:
             return "Lütfen geçerli bir gün seçin (1-3).\n\n" + DATE_MENU
 
-    # Kullanıcı saat seçimi yapıyorsa
-    if current_state == "SELECT_TIME":
+    # State 'SELECT_TIME_' ile başlıyorsa
+    if current_state.startswith("SELECT_TIME_"):
         if incoming_msg in ["1", "2", "3", "4"]:
+            date_choice = current_state.split("_")[-1] # Bir önceki adımda sakladığımız gün (1, 2 veya 3)
+            
+            # Google Calendar'a ekle!
+            success = create_calendar_event(date_choice, incoming_msg, session_id)
+            
             user_states[session_id] = "COMPLETED" 
-            return "✅ Harika! Randevunuz başarıyla oluşturuldu ve yetkililerin Google Takvimi'ne otomatik olarak eklendi.\n\nBizi tercih ettiğiniz için teşekkür ederiz. Ana menüye dönmek için 'menü' yazabilirsiniz."
+            if success:
+                return "✅ Harika! Randevunuz başarıyla oluşturuldu ve yetkililerimize bildirildi.\n\nAna menüye dönmek için 'menü' yazabilirsiniz."
+            else:
+                return "❌ Takvime kaydedilirken bir sorun oluştu. Lütfen daha sonra tekrar deneyin."
         else:
             return "Lütfen geçerli bir saat seçin (1-4).\n\n" + TIME_MENU
-
-    # -------------------------------------------------------------
 
     # Kullanıcı bir menüde sıkıştıysa geri dönüş
     return "Ana menüye dönmek için 'menü' yazabilirsiniz."
