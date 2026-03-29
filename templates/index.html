@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LeadNova WP Demo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #d1d7db;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .chat-container {
+            width: 100%;
+            max-width: 400px;
+            height: 100vh;
+            max-height: 800px;
+            background-color: #e5ddd5;
+            background-image: url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png");
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
+        .header {
+            background-color: #075e54;
+            color: white;
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .header img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 15px;
+            background-color: white;
+        }
+        .chat-box {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .message {
+            max-width: 80%;
+            padding: 10px 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+        .message.bot {
+            background-color: #ffffff;
+            align-self: flex-start;
+            border-top-left-radius: 0;
+            box-shadow: 0 1px 1px rgba(0,0,0,0.1);
+        }
+        .message.user {
+            background-color: #dcf8c6;
+            align-self: flex-end;
+            border-top-right-radius: 0;
+            box-shadow: 0 1px 1px rgba(0,0,0,0.1);
+        }
+        .input-area {
+            background-color: #f0f0f0;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+        }
+        .input-area input {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 20px;
+            outline: none;
+            font-size: 15px;
+        }
+        .input-area button {
+            background-color: #008f68;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 45px;
+            height: 45px;
+            margin-left: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="chat-container">
+    <div class="header">
+        <img src="https://cdn-icons-png.flaticon.com/512/4712/4712010.png" alt="Bot">
+        <div>
+            LeadNova Bot
+            <div style="font-size: 12px; font-weight: normal; color: #d1d7db;">Çevrimiçi</div>
+        </div>
+    </div>
+    
+    <div class="chat-box" id="chat-box">
+        </div>
+    
+    <div class="input-area">
+        <input type="text" id="user-input" placeholder="Bir mesaj yazın..." onkeypress="handleKeyPress(event)">
+        <button onclick="sendMessage()">➤</button>
+    </div>
+</div>
+
+<script>
+    // Kullanıcı için rastgele bir session ID oluştur (Sayfayı yenileyene kadar aynı kalır)
+    const sessionId = "user_" + Math.floor(Math.random() * 1000000);
+
+    // Sayfa yüklendiğinde botu tetiklemek için görünmez bir 'menü' mesajı atıyoruz
+    window.onload = () => {
+        fetchChatResponse("menü");
+    };
+
+    function appendMessage(sender, text) {
+        const chatBox = document.getElementById("chat-box");
+        const msgDiv = document.createElement("div");
+        msgDiv.classList.add("message", sender);
+        msgDiv.innerText = text;
+        chatBox.appendChild(msgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function sendMessage() {
+        const inputField = document.getElementById("user-input");
+        const text = inputField.value.trim();
+        if (text === "") return;
+
+        appendMessage("user", text);
+        inputField.value = "";
+        
+        fetchChatResponse(text);
+    }
+
+    function handleKeyPress(event) {
+        if (event.key === "Enter") {
+            sendMessage();
+        }
+    }
+
+    function fetchChatResponse(messageText) {
+        fetch('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sender: sessionId, message: messageText })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(data.response) {
+                appendMessage("bot", data.response);
+            }
+        })
+        .catch(error => console.error("Hata:", error));
+    }
+</script>
+
+</body>
+</html>

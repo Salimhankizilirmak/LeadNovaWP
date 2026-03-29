@@ -1,13 +1,12 @@
 # import antigravity  # LeadNova uçuşa hazır! 🚀 (Commented out to prevent browser pop-ups)
 print("LeadNova uçuşa hazır! 🚀")
 
-from flask import Flask, request, jsonify
-# Google Calendar entegrasyonu için eklenecekler
-# from googleapiclient.discovery import build
+from flask import Flask, request, jsonify, render_template
+import os
 
 app = Flask(__name__)
 
-# Kullanıcıların hangi menüde olduğunu tutacağımız basit bir sözlük (İleride Veritabanına alınacak)
+# --- BOT MANTIĞI ---
 user_states = {}
 
 MAIN_MENU = """*LeadNova System’e hoş geldiniz!* 🚀
@@ -29,18 +28,18 @@ SUB_MENUS = {
     "6": "Bahis Sitesi Kurulum ve Analiz Sistemine Hoş Geldiniz. Detaylar için uzman ekibimize aktarılıyorsunuz..."
 }
 
-def handle_message(phone_number, incoming_msg):
+def handle_message(session_id, incoming_msg):
     # Kullanıcı ilk defa yazıyorsa veya "menü" yazdıysa
-    if phone_number not in user_states or incoming_msg.lower() == "menü":
-        user_states[phone_number] = "MAIN_MENU"
+    if session_id not in user_states or incoming_msg.lower() == "menü":
+        user_states[session_id] = "MAIN_MENU"
         return MAIN_MENU
 
-    current_state = user_states[phone_number]
+    current_state = user_states[session_id]
 
     # Ana menüdeyse ve bir seçenek seçtiyse
     if current_state == "MAIN_MENU":
         if incoming_msg in SUB_MENUS:
-            user_states[phone_number] = f"SUB_MENU_{incoming_msg}"
+            user_states[session_id] = f"SUB_MENU_{incoming_msg}"
             return SUB_MENUS[incoming_msg]
         else:
             return "Lütfen geçerli bir numara tuşlayın (1-6).\n\n" + MAIN_MENU
@@ -48,30 +47,45 @@ def handle_message(phone_number, incoming_msg):
     # Alt menülerden birindeyse ve "Randevu" (2) seçildiyse (Örnek: Güzellik merkezi veya Sanayi)
     if current_state in ["SUB_MENU_1", "SUB_MENU_3"]:
         if incoming_msg == "2":
-            user_states[phone_number] = "AWAITING_DATE"
+            user_states[session_id] = "AWAITING_DATE"
             return "Lütfen randevu almak istediğiniz tarihi ve saati yazın (Örn: 25 Ekim 14:00). Takviminize otomatik eklenecektir."
 
     # Kullanıcı bir menüde sıkıştıysa geri dönüş
     return "Ana menüye dönmek için 'menü' yazabilirsiniz."
 
+# --- WEB ARAYÜZÜ ROTASI ---
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# --- WEB ARAYÜZÜ İÇİN HABERLEŞME ROTASI ---
+@app.route('/chat', methods=['POST'])
+def web_chat():
+    data = request.json
+    session_id = data.get('sender') 
+    incoming_msg = data.get('message')
+    
+    if not session_id or not incoming_msg:
+        return jsonify({"status": "error", "message": "Eksik veri"}), 400
+        
+    response_text = handle_message(session_id, incoming_msg)
+    return jsonify({"status": "success", "response": response_text}), 200
+
+# --- GERÇEK WHATSAPP (META API) İÇİN ROTAMIZ ---
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-    # WhatsApp (Meta/Twilio vb.) API'sinden gelen veriyi parse et
     phone_number = data.get('sender')
     incoming_msg = data.get('message')
     
     if not phone_number or not incoming_msg:
-        return jsonify({"status": "error", "message": "Missing sender or message"}), 400
+        return jsonify({"status": "error"}), 400
         
     response_text = handle_message(phone_number, incoming_msg)
-    
-    # Burada yanıtı WhatsApp API üzerinden geri gönderme kodu olacak
-    # send_whatsapp_message(phone_number, response_text)
-    
     print(f"Response for {phone_number}: {response_text}")
-    
     return jsonify({"status": "success", "response": response_text}), 200
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    # Render'da çalışırken PORT environment variable'ını okumamız gerekir
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
