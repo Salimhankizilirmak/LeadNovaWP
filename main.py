@@ -1,4 +1,6 @@
-import antigravity  # LeadNova uçuşa hazır! 🚀
+# import antigravity  # LeadNova uçuşa hazır! 🚀 (Commented out to prevent browser pop-ups)
+print("LeadNova uçuşa hazır! 🚀")
+
 from flask import Flask, request, jsonify
 # Google Calendar entegrasyonu için eklenecekler
 # from googleapiclient.discovery import build
