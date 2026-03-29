@@ -71,7 +71,14 @@ def create_calendar_event(date_choice, time_choice, session_id):
         end_datetime = f"{end_dt.strftime('%Y-%m-%d')}T{end_dt.strftime('%H:%M:%S')}+03:00"
 
         # API Bağlantısı
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+        service_account_json = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+        if service_account_json:
+            import json
+            service_account_info = json.loads(service_account_json)
+            creds = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
+        else:
+            creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+            
         service = build('calendar', 'v3', credentials=creds)
         
         event = {
