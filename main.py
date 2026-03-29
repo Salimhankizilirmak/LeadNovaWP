@@ -28,6 +28,18 @@ SUB_MENUS = {
     "6": "Bahis Sitesi Kurulum ve Analiz Sistemine Hoş Geldiniz. Detaylar için uzman ekibimize aktarılıyorsunuz..."
 }
 
+# --- YENİ EKLENEN RANDEVU SEÇENEKLERİ ---
+DATE_MENU = """Lütfen randevu gününü seçin:
+1️⃣ Bugün
+2️⃣ Yarın
+3️⃣ 2 Gün Sonra"""
+
+TIME_MENU = """Lütfen randevu saatini seçin:
+1️⃣ 10:00
+2️⃣ 13:00
+3️⃣ 15:00
+4️⃣ 17:00"""
+
 def handle_message(session_id, incoming_msg):
     # Kullanıcı ilk defa yazıyorsa veya "menü" yazdıysa
     if session_id not in user_states or incoming_msg.lower() == "menü":
@@ -44,11 +56,31 @@ def handle_message(session_id, incoming_msg):
         else:
             return "Lütfen geçerli bir numara tuşlayın (1-6).\n\n" + MAIN_MENU
 
-    # Alt menülerden birindeyse ve "Randevu" (2) seçildiyse (Örnek: Güzellik merkezi veya Sanayi)
+    # Alt menülerden birindeyse ve "Randevu Al" (2) seçildiyse (Sanayi veya Güzellik)
     if current_state in ["SUB_MENU_1", "SUB_MENU_3"]:
         if incoming_msg == "2":
-            user_states[session_id] = "AWAITING_DATE"
-            return "Lütfen randevu almak istediğiniz tarihi ve saati yazın (Örn: 25 Ekim 14:00). Takviminize otomatik eklenecektir."
+            user_states[session_id] = "SELECT_DATE"
+            return DATE_MENU
+
+    # ---------------- YENİ EKLENEN RANDEVU AKIŞI ----------------
+
+    # Kullanıcı gün seçimi yapıyorsa
+    if current_state == "SELECT_DATE":
+        if incoming_msg in ["1", "2", "3"]:
+            user_states[session_id] = "SELECT_TIME"
+            return TIME_MENU
+        else:
+            return "Lütfen geçerli bir gün seçin (1-3).\n\n" + DATE_MENU
+
+    # Kullanıcı saat seçimi yapıyorsa
+    if current_state == "SELECT_TIME":
+        if incoming_msg in ["1", "2", "3", "4"]:
+            user_states[session_id] = "COMPLETED" 
+            return "✅ Harika! Randevunuz başarıyla oluşturuldu ve yetkililerin Google Takvimi'ne otomatik olarak eklendi.\n\nBizi tercih ettiğiniz için teşekkür ederiz. Ana menüye dönmek için 'menü' yazabilirsiniz."
+        else:
+            return "Lütfen geçerli bir saat seçin (1-4).\n\n" + TIME_MENU
+
+    # -------------------------------------------------------------
 
     # Kullanıcı bir menüde sıkıştıysa geri dönüş
     return "Ana menüye dönmek için 'menü' yazabilirsiniz."
