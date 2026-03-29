@@ -12,7 +12,7 @@ SCOPES = ['https://www.googleapis.com/auth/calendar']
 CREDENTIALS_FILE = 'service_account.json'
 # Eğer yukarıdaki adımlarda botu kendi ana takviminle paylaştıysan 'primary' yerine kendi Gmail adresini yazmalısın. 
 # (Örn: 'leadnova@gmail.com')
-CALENDAR_ID = 'primary' 
+CALENDAR_ID = 'salimhankizilirmak@gmail.com' 
 
 # Kullanıcı durumları
 user_states = {}
