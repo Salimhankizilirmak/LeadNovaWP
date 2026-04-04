@@ -18,24 +18,34 @@ CALENDAR_ID = 'salimhankizilirmak@gmail.com'
 # Kullanıcı durumları
 user_states = {}
 
-MAIN_MENU = """*LeadNova System’e hoş geldiniz!* 🚀
+MAIN_MENU = """*LeadNova Systems’e hoş geldiniz!* 🚀
 
-Hangi sistem formatını kullanmak istersiniz?
-1️⃣ Sanayi
-2️⃣ Emlak
-3️⃣ Güzellik Merkezi
-4️⃣ Tur Hizmeti
-5️⃣ Müşteri Planlama Sistemi
-6️⃣ Bahis Sitesi Kurulum – Analiz"""
+Size en hızlı şekilde yardımcı olabilmemiz için lütfen sektörünüzü seçin:
+1️⃣ Emlak
+2️⃣ Güzellik Merkezi
+3️⃣ Klinik
+4️⃣ Sanayi
+5️⃣ Galeri (Araç Satış)
+
+👉 Lütfen bir seçim yapın."""
+
 
 SUB_MENUS = {
-    "1": "Sanayi Demo Sistemine Hoş Geldiniz. İşleminizi seçin:\n1- Hırdavat Grubu\n2- Randevu Al\n3- Canlı Destek\n4- Motor – Redüktör",
-    "2": "Emlak Demo Sistemine Hoş Geldiniz. İşleminizi seçin:\n1- Satılık Portföy\n2- Kiralık Portföy\n3- Canlı Destek",
-    "3": "Güzellik Merkezi Demo Sistemine Hoş Geldiniz. İşleminizi seçin:\n1- İşlemlerimiz\n2- Randevu Al\n3- Canlı Destek",
-    "4": "Tur Hizmeti Demo Sistemine Hoş Geldiniz. İşleminizi seçin:\n1- Aktif Seferler\n2- Özel Turlar\n3- Canlı Destek",
-    "5": "Müşteri Planlama Sistemine Hoş Geldiniz. İşleminizi seçin:\n1- Whatsapp Otomasyon\n2- Web Sitesi\n3- Yazılım Hizmetleri\n4- Bot Kurulum\n5- Müşteri Kaybetmeyen Strateji",
-    "6": "Bahis Sitesi Kurulum ve Analiz Sistemine Hoş Geldiniz. Detaylar için uzman ekibimize aktarılıyorsunuz..."
+    "1": "🏡 *Emlak hizmetlerimiz:*\n1 - Satılık Evler\n2 - Kiralık Evler\n3 - Satılık Arsalar\n4 - Fiyat Bilgisi Al\n5 - Randevu Oluştur\n0 - Canlı Destek",
+    "2": "✨ *Güzellik Merkezi Hizmetlerimiz:*\n1 - Lazer Epilasyon\n2 - Cilt Bakımı\n3 - Ağda\n4 - Kuaför Hizmetleri\n5 - Tırnak / Nail Art\n6 - Fiyat Bilgisi\n7 - Randevu Oluştur\n0 - Canlı Destek",
+    "3": "🏥 *Klinik Hizmetlerimiz:*\n1 - Estetik İşlemler\n2 - Diş Tedavileri\n3 - Cilt Uygulamaları\n4 - Bilgi Al\n5 - Randevu Oluştur\n0 - Canlı Destek",
+    "4": "⚙️ *Sanayi - Size nasıl yardımcı olabiliriz?*\n1 - Ürün / Hizmet Bilgisi\n2 - Teklif Al\n3 - Proje Danışmanlığı\n4 - Yetkili ile Görüş\n0 - Canlı Destek",
+    "5": "🚗 *Galeri - Araç seçeneklerimiz:*\n1 - Satılık Araçlar\n2 - Araç Fiyatları\n3 - Takas İmkanları\n4 - Test Sürüşü / Randevu\n0 - Canlı Destek"
 }
+
+# --- YENİ BİLGİ TOPLAMA METİNLERİ ---
+INFO_PROMPTS = {
+    "emlak_satilik": "Size en uygun satılık evleri sunabilmemiz için:\n📍 Lokasyon\n💰 Bütçe\n🏠 Oda sayısı\n\nbilgilerini aralarına virgül koyarak yazabilirsiniz.\n🎁 Bugün başvuru yapan müşterilerimize özel fırsatlar sunulmaktadır.",
+    "klinik_bilgi": "Size en doğru bilgiyi verebilmemiz için:\n- İlgilendiğiniz işlem\n- Kısa açıklama\n\nyazabilirsiniz. Uzman ekibimiz sizinle ilgilenecektir.",
+    "sanayi_teklif": "Size özel teklif hazırlayabilmemiz için:\n- Talep ettiğiniz ürün / hizmet\n- Adınız\n- Telefon numaranız\n\nbilgilerini yazabilirsiniz. Ekibimiz en kısa sürede dönüş sağlayacaktır.",
+    "galeri_arac": "Size uygun araçları sunabilmemiz için:\n🚗 Araç tipi\n💰 Bütçe\n📍 Şehir\n\nbilgilerini yazabilirsiniz."
+}
+
 
 DATE_MENU = """Lütfen randevu gününü seçin:
 1️⃣ Bugün
@@ -99,79 +109,32 @@ def create_calendar_event(date_choice, time_choice, session_id):
         return False
 
 def handle_message(session_id, incoming_msg):
+    incoming_msg = incoming_msg.strip()
+    
     # Kullanıcı ilk defa yazıyorsa veya "menü" yazdıysa
-    if session_id not in user_states or incoming_msg.lower() == "menü":
+    if session_id not in user_states or incoming_msg.lower() in ["menü", "menu", "merhaba", "selam"]:
         user_states[session_id] = "MAIN_MENU"
         return MAIN_MENU
 
     current_state = user_states[session_id]
 
-    # Ana menüdeyse ve bir seçenek seçtiyse
+    # HER YERDE GEÇERLİ ORTAK CANLI DESTEK (0'a basılırsa)
+    if incoming_msg == "0":
+        user_states[session_id] = "LIVE_SUPPORT"
+        return "Sizi müşteri temsilcimize aktarıyorum. Lütfen bekleyin... 🎧"
+
+    # --- ANA MENÜ KONTROLÜ ---
     if current_state == "MAIN_MENU":
         if incoming_msg in SUB_MENUS:
             user_states[session_id] = f"SUB_MENU_{incoming_msg}"
             return SUB_MENUS[incoming_msg]
         else:
-            return "Lütfen geçerli bir numara tuşlayın (1-6).\n\n" + MAIN_MENU
+            return "Lütfen geçerli bir numara tuşlayın (1-5).\n\n" + MAIN_MENU
 
-    # Alt menülerden birindeyse ve "Randevu Al" (2) seçildiyse (Sanayi veya Güzellik)
-    if current_state in ["SUB_MENU_1", "SUB_MENU_3"]:
-        if incoming_msg == "2":
-            user_states[session_id] = "SELECT_DATE"
-            return DATE_MENU
-
-    # Kullanıcı gün seçimi yapıyorsa
-    if current_state == "SELECT_DATE":
-        if incoming_msg in ["1", "2", "3"]:
-            # Seçilen günü state içinde tutuyoruz ki bir sonraki adımda hatırlayalım
-            user_states[session_id] = f"SELECT_TIME_{incoming_msg}"
-            return TIME_MENU
-        else:
-            return "Lütfen geçerli bir gün seçin (1-3).\n\n" + DATE_MENU
-
-    # State 'SELECT_TIME_' ile başlıyorsa
-    if current_state.startswith("SELECT_TIME_"):
-        if incoming_msg in ["1", "2", "3", "4"]:
-            date_choice = current_state.split("_")[-1] # Bir önceki adımda sakladığımız gün (1, 2 veya 3)
-            
-            # --- GEÇMİŞ ZAMAN KONTROLÜ BAŞLANGICI ---
-            today = datetime.date.today()
-            if date_choice == "1":
-                target_date = today
-            elif date_choice == "2":
-                target_date = today + datetime.timedelta(days=1)
-            elif date_choice == "3":
-                target_date = today + datetime.timedelta(days=2)
-                
-            time_mapping = {"1": "10:00:00", "2": "13:00:00", "3": "15:00:00", "4": "17:00:00"}
-            target_time_str = time_mapping[incoming_msg]
-            
-            # Türkiye Saati'ni (UTC+3) ayarla
-            tz_tr = timezone(timedelta(hours=3))
-            now_tr = datetime.datetime.now(tz_tr) # Şu anki Türkiye saati
-            
-            # Müşterinin seçtiği tarihi ve saati birleştirip Türkiye saatine çeviriyoruz
-            target_dt = datetime.datetime.strptime(f"{target_date} {target_time_str}", "%Y-%m-%d %H:%M:%S")
-            target_dt = target_dt.replace(tzinfo=tz_tr)
-            
-            # EĞER SEÇİLEN ZAMAN ŞU ANDAN KÜÇÜKSE (GEÇMİŞTEYSE) İZİN VERME!
-            if target_dt < now_tr:
-                return f"❌ Hata: Seçtiğiniz saat ({target_time_str[:5]}) geçmişte kaldı! Lütfen ileri bir saat seçin.\n\n" + TIME_MENU
-            # --- GEÇMİŞ ZAMAN KONTROLÜ BİTİŞİ ---
-
-            # Google Calendar'a ekle!
-            success = create_calendar_event(date_choice, incoming_msg, session_id)
-            
-            user_states[session_id] = "COMPLETED" 
-            if success:
-                return "✅ Harika! Randevunuz başarıyla oluşturuldu ve yetkililerimize bildirildi.\n\nAna menüye dönmek için 'menü' yazabilirsiniz."
-            else:
-                return "❌ Takvime kaydedilirken bir sorun oluştu. Lütfen daha sonra tekrar deneyin."
-        else:
-            return "Lütfen geçerli bir saat seçin (1-4).\n\n" + TIME_MENU
-
-    # Kullanıcı bir menüde sıkıştıysa geri dönüş
+    # Alt menü kontrolü ve diğer durumlar için geçici dönüş
+    # (Adım 2'de burası detaylandırılacak)
     return "Ana menüye dönmek için 'menü' yazabilirsiniz."
+
 
 # --- WEB ARAYÜZÜ ROTASI ---
 @app.route('/')
