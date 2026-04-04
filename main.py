@@ -47,16 +47,16 @@ INFO_PROMPTS = {
 }
 
 
-DATE_MENU = """Lütfen randevu gününü seçin:
+DATE_MENU = """📅 Randevu oluşturmak için lütfen gün seçiniz:
 1️⃣ Bugün
-2️⃣ Yarın
-3️⃣ 2 Gün Sonra"""
+2️⃣ Yarın"""
 
-TIME_MENU = """Lütfen randevu saatini seçin:
+TIME_MENU = """⏰ Lütfen saat seçiniz:
 1️⃣ 10:00
 2️⃣ 13:00
 3️⃣ 15:00
-4️⃣ 17:00"""
+4️⃣ 18:00"""
+
 
 def create_calendar_event(date_choice, time_choice, session_id):
     try:
@@ -70,7 +70,8 @@ def create_calendar_event(date_choice, time_choice, session_id):
             target_date = today + datetime.timedelta(days=2)
             
         # Saati belirle
-        time_mapping = {"1": "10:00:00", "2": "13:00:00", "3": "15:00:00", "4": "17:00:00"}
+        time_mapping = {"1": "10:00:00", "2": "13:00:00", "3": "15:00:00", "4": "18:00:00"}
+
         target_time = time_mapping[time_choice]
         
         start_datetime = f"{target_date}T{target_time}+03:00" # Türkiye saati
@@ -111,19 +112,17 @@ def create_calendar_event(date_choice, time_choice, session_id):
 def handle_message(session_id, incoming_msg):
     incoming_msg = incoming_msg.strip()
     
-    # Kullanıcı ilk defa yazıyorsa veya "menü" yazdıysa
     if session_id not in user_states or incoming_msg.lower() in ["menü", "menu", "merhaba", "selam"]:
         user_states[session_id] = "MAIN_MENU"
         return MAIN_MENU
 
     current_state = user_states[session_id]
 
-    # HER YERDE GEÇERLİ ORTAK CANLI DESTEK (0'a basılırsa)
     if incoming_msg == "0":
         user_states[session_id] = "LIVE_SUPPORT"
         return "Sizi müşteri temsilcimize aktarıyorum. Lütfen bekleyin... 🎧"
 
-    # --- ANA MENÜ KONTROLÜ ---
+    # --- ANA MENÜ ---
     if current_state == "MAIN_MENU":
         if incoming_msg in SUB_MENUS:
             user_states[session_id] = f"SUB_MENU_{incoming_msg}"
@@ -131,9 +130,110 @@ def handle_message(session_id, incoming_msg):
         else:
             return "Lütfen geçerli bir numara tuşlayın (1-5).\n\n" + MAIN_MENU
 
-    # Alt menü kontrolü ve diğer durumlar için geçici dönüş
-    # (Adım 2'de burası detaylandırılacak)
+    # --- ALT MENÜLER VE VERİ TOPLAMA/RANDEVU YÖNLENDİRMELERİ ---
+    
+    # 1. EMLAK
+    if current_state == "SUB_MENU_1":
+        if incoming_msg in ["1", "2", "3"]:
+            user_states[session_id] = "AWAITING_INFO"
+            return INFO_PROMPTS["emlak_satilik"]
+        elif incoming_msg == "5":
+            user_states[session_id] = "SELECT_DATE"
+            return DATE_MENU
+            
+    # 2. GÜZELLİK MERKEZİ
+    elif current_state == "SUB_MENU_2":
+        if incoming_msg == "1": # Lazer alt menüsü
+            user_states[session_id] = "SUB_MENU_LAZER"
+            return "✨ Lazer epilasyon hakkında:\n1 - Fiyat bilgisi al\n2 - Randevu oluştur\n\n🎁 Bugün randevu oluşturan müşterilerimize özel indirim uygulanmaktadır."
+        elif incoming_msg == "7":
+            user_states[session_id] = "SELECT_DATE"
+            return DATE_MENU
+            
+    # 2.1 GÜZELLİK MERKEZİ -> LAZER ALT MENÜSÜ
+    elif current_state == "SUB_MENU_LAZER":
+        if incoming_msg == "2":
+            user_states[session_id] = "SELECT_DATE"
+            return DATE_MENU
+
+    # 3. KLİNİK
+    elif current_state == "SUB_MENU_3":
+        if incoming_msg == "4":
+            user_states[session_id] = "AWAITING_INFO"
+            return INFO_PROMPTS["klinik_bilgi"]
+        elif incoming_msg == "5":
+            user_states[session_id] = "SELECT_DATE"
+            return DATE_MENU
+
+    # 4. SANAYİ
+    elif current_state == "SUB_MENU_4":
+        if incoming_msg == "2":
+            user_states[session_id] = "AWAITING_INFO"
+            return INFO_PROMPTS["sanayi_teklif"]
+
+    # 5. GALERİ
+    elif current_state == "SUB_MENU_5":
+        if incoming_msg == "1":
+            user_states[session_id] = "AWAITING_INFO"
+            return INFO_PROMPTS["galeri_arac"]
+        elif incoming_msg == "4":
+            user_states[session_id] = "SELECT_DATE"
+            return DATE_MENU
+
+    # --- VERİ TOPLAMA (Müşteri bilgi girdiğinde) ---
+    if current_state == "AWAITING_INFO":
+        # Burada müşterinin yazdığı veriyi (incoming_msg) gerçek sistemde veritabanına veya Telegram'a atacağız.
+        user_states[session_id] = "COMPLETED"
+        return "✅ Bilgileriniz başarıyla alınmıştır. Uzman ekibimiz sizinle en kısa sürede iletişime geçecektir.\n\nAna menüye dönmek için 'menü' yazabilirsiniz."
+
+    # --- ORTAK RANDEVU SİSTEMİ (Tüm sektörler buraya akar) ---
+    if current_state == "SELECT_DATE":
+        if incoming_msg in ["1", "2"]:
+            user_states[session_id] = f"SELECT_TIME_{incoming_msg}"
+            return TIME_MENU
+        else:
+            return "Lütfen geçerli bir gün seçin (1-2).\n\n" + DATE_MENU
+
+    if current_state.startswith("SELECT_TIME_"):
+        if incoming_msg in ["1", "2", "3", "4"]:
+            date_choice = current_state.split("_")[-1]
+            
+            # --- GEÇMİŞ ZAMAN KONTROLÜ BAŞLANGICI ---
+            today = datetime.date.today()
+            if date_choice == "1":
+                target_date = today
+            elif date_choice == "2":
+                target_date = today + datetime.timedelta(days=1)
+                
+            time_mapping = {"1": "10:00:00", "2": "13:00:00", "3": "15:00:00", "4": "18:00:00"}
+            target_time_str = time_mapping[incoming_msg]
+            
+            # Türkiye Saati'ni (UTC+3) ayarla
+            tz_tr = timezone(timedelta(hours=3))
+            now_tr = datetime.datetime.now(tz_tr) # Şu anki Türkiye saati
+            
+            # Müşterinin seçtiği tarihi ve saati birleştirip Türkiye saatine çeviriyoruz
+            target_dt = datetime.datetime.strptime(f"{target_date} {target_time_str}", "%Y-%m-%d %H:%M:%S")
+            target_dt = target_dt.replace(tzinfo=tz_tr)
+            
+            # EĞER SEÇİLEN ZAMAN ŞU ANDAN KÜÇÜKSE (GEÇMİŞTEYSE) İZİN VERME!
+            if target_dt < now_tr:
+                return f"❌ Hata: Seçtiğiniz saat ({target_time_str[:5]}) geçmişte kaldı! Lütfen ileri bir saat seçin.\n\n" + TIME_MENU
+            # --- GEÇMİŞ ZAMAN KONTROLÜ BİTİŞİ ---
+
+            # Google Calendar'a ekle!
+            success = create_calendar_event(date_choice, incoming_msg, session_id)
+            
+            user_states[session_id] = "COMPLETED" 
+            if success:
+                return "✅ Harika! Randevunuz başarıyla oluşturuldu.\n\nAna menüye dönmek için 'menü' yazabilirsiniz."
+            else:
+                return "❌ Takvime kaydedilirken bir sorun oluştu. Lütfen daha sonra tekrar deneyin."
+        else:
+            return "Lütfen geçerli bir saat seçin (1-4).\n\n" + TIME_MENU
+
     return "Ana menüye dönmek için 'menü' yazabilirsiniz."
+
 
 
 # --- WEB ARAYÜZÜ ROTASI ---
