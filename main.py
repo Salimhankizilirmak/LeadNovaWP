@@ -5,6 +5,9 @@ import datetime
 from datetime import timezone, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from apscheduler.schedulers.background import BackgroundScheduler
+import time
+
 
 app = Flask(__name__)
 
@@ -38,13 +41,45 @@ SUB_MENUS = {
     "5": "🚗 *Galeri - Araç seçeneklerimiz:*\n1 - Satılık Araçlar\n2 - Araç Fiyatları\n3 - Takas İmkanları\n4 - Test Sürüşü / Randevu\n0 - Canlı Destek"
 }
 
-# --- YENİ BİLGİ TOPLAMA METİNLERİ ---
-INFO_PROMPTS = {
-    "emlak_satilik": "Size en uygun satılık evleri sunabilmemiz için:\n📍 Lokasyon\n💰 Bütçe\n🏠 Oda sayısı\n\nbilgilerini aralarına virgül koyarak yazabilirsiniz.\n🎁 Bugün başvuru yapan müşterilerimize özel fırsatlar sunulmaktadır.",
-    "klinik_bilgi": "Size en doğru bilgiyi verebilmemiz için:\n- İlgilendiğiniz işlem\n- Kısa açıklama\n\nyazabilirsiniz. Uzman ekibimiz sizinle ilgilenecektir.",
-    "sanayi_teklif": "Size özel teklif hazırlayabilmemiz için:\n- Talep ettiğiniz ürün / hizmet\n- Adınız\n- Telefon numaranız\n\nbilgilerini yazabilirsiniz. Ekibimiz en kısa sürede dönüş sağlayacaktır.",
-    "galeri_arac": "Size uygun araçları sunabilmemiz için:\n🚗 Araç tipi\n💰 Bütçe\n📍 Şehir\n\nbilgilerini yazabilirsiniz."
-}
+# --- TAKİP (FOLLOW-UP) MESAJLARI ---
+FOLLOWUP_1_HOUR = "Size yardımcı olabilmemiz için buradayız 🙂\nİsterseniz size özel bilgi verebiliriz."
+FOLLOWUP_1_DAY = "🎁 Bugüne özel fırsatlarımız devam ediyor.\nBilgi almak ister misiniz?"
+
+# Zamanlayıcıyı başlatıyoruz
+scheduler = BackgroundScheduler(daemon=True)
+scheduler.start()
+
+def send_proactive_message(session_id, message_text):
+    """
+    Bu fonksiyon ileride doğrudan Meta (WhatsApp) API'sine bağlanacak.
+    Şu an web demosu kullandığımız için konsola logluyoruz.
+    """
+    print(f"\n[🚀 OTOMATİK TAKİP MESAJI GÖNDERİLDİ] -> {session_id}")
+    print(f"Mesaj: {message_text}\n")
+
+def check_followups():
+    """
+    Arka planda her dakika çalışıp müşterilerin son etkileşim sürelerini kontrol eden beyin.
+    """
+    now = datetime.datetime.now()
+    for session_id, data in list(user_states.items()):
+        # Sadece sözlük (dict) yapısına geçirdiğimiz kullanıcıları kontrol et
+        if isinstance(data, dict):
+            last_active = data.get("last_active")
+            if not last_active: continue
+            
+            # Eğer müşteri 1 saat (3600 saniye) boyunca yazmadıysa ve 1. takip atılmadıysa
+            if not data.get("f1_sent") and (now - last_active).total_seconds() >= 3600:
+                send_proactive_message(session_id, FOLLOWUP_1_HOUR)
+                data["f1_sent"] = True
+                
+            # Eğer müşteri 1 gün (86400 saniye) boyunca yazmadıysa ve 2. takip atılmadıysa
+            elif not data.get("f2_sent") and (now - last_active).total_seconds() >= 86400:
+                send_proactive_message(session_id, FOLLOWUP_1_DAY)
+                data["f2_sent"] = True
+
+# Zamanlayıcıya bu kontrol görevini her 1 dakikada bir yapmasını söylüyoruz
+scheduler.add_job(check_followups, 'interval', minutes=1)
 
 
 DATE_MENU = """📅 Randevu oluşturmak için lütfen gün seçiniz:
@@ -112,20 +147,37 @@ def create_calendar_event(date_choice, time_choice, session_id):
 def handle_message(session_id, incoming_msg):
     incoming_msg = incoming_msg.strip()
     
-    if session_id not in user_states or incoming_msg.lower() in ["menü", "menu", "merhaba", "selam"]:
-        user_states[session_id] = "MAIN_MENU"
-        return MAIN_MENU
+    # KULLANICIYI KAYDETME VE SON AKTİVİTEYİ GÜNCELLEME
+    if session_id not in user_states:
+        user_states[session_id] = {
+            "state": "MAIN_MENU",
+            "last_active": datetime.datetime.now(),
+            "f1_sent": False,
+            "f2_sent": False
+        }
+    else:
+        # Eski basit string yapısını yeni sözlük yapısına çevir (Hata almamak için)
+        if not isinstance(user_states[session_id], dict):
+            user_states[session_id] = {
+                "state": user_states[session_id],
+                "last_active": datetime.datetime.now(),
+                "f1_sent": False,
+                "f2_sent": False
+            }
+        else:
+            user_states[session_id]["last_active"] = datetime.datetime.now()
 
-    current_state = user_states[session_id]
+    # Artık current_state'i sözlüğün içinden okuyoruz
+    current_state = user_states[session_id]["state"]
 
     if incoming_msg == "0":
-        user_states[session_id] = "LIVE_SUPPORT"
+        user_states[session_id]["state"] = "LIVE_SUPPORT"
         return "Sizi müşteri temsilcimize aktarıyorum. Lütfen bekleyin... 🎧"
 
     # --- ANA MENÜ ---
     if current_state == "MAIN_MENU":
         if incoming_msg in SUB_MENUS:
-            user_states[session_id] = f"SUB_MENU_{incoming_msg}"
+            user_states[session_id]["state"] = f"SUB_MENU_{incoming_msg}"
             return SUB_MENUS[incoming_msg]
         else:
             return "Lütfen geçerli bir numara tuşlayın (1-5).\n\n" + MAIN_MENU
@@ -135,61 +187,61 @@ def handle_message(session_id, incoming_msg):
     # 1. EMLAK
     if current_state == "SUB_MENU_1":
         if incoming_msg in ["1", "2", "3"]:
-            user_states[session_id] = "AWAITING_INFO"
+            user_states[session_id]["state"] = "AWAITING_INFO"
             return INFO_PROMPTS["emlak_satilik"]
         elif incoming_msg == "5":
-            user_states[session_id] = "SELECT_DATE"
+            user_states[session_id]["state"] = "SELECT_DATE"
             return DATE_MENU
             
     # 2. GÜZELLİK MERKEZİ
     elif current_state == "SUB_MENU_2":
         if incoming_msg == "1": # Lazer alt menüsü
-            user_states[session_id] = "SUB_MENU_LAZER"
+            user_states[session_id]["state"] = "SUB_MENU_LAZER"
             return "✨ Lazer epilasyon hakkında:\n1 - Fiyat bilgisi al\n2 - Randevu oluştur\n\n🎁 Bugün randevu oluşturan müşterilerimize özel indirim uygulanmaktadır."
         elif incoming_msg == "7":
-            user_states[session_id] = "SELECT_DATE"
+            user_states[session_id]["state"] = "SELECT_DATE"
             return DATE_MENU
             
     # 2.1 GÜZELLİK MERKEZİ -> LAZER ALT MENÜSÜ
     elif current_state == "SUB_MENU_LAZER":
         if incoming_msg == "2":
-            user_states[session_id] = "SELECT_DATE"
+            user_states[session_id]["state"] = "SELECT_DATE"
             return DATE_MENU
 
     # 3. KLİNİK
     elif current_state == "SUB_MENU_3":
         if incoming_msg == "4":
-            user_states[session_id] = "AWAITING_INFO"
+            user_states[session_id]["state"] = "AWAITING_INFO"
             return INFO_PROMPTS["klinik_bilgi"]
         elif incoming_msg == "5":
-            user_states[session_id] = "SELECT_DATE"
+            user_states[session_id]["state"] = "SELECT_DATE"
             return DATE_MENU
 
     # 4. SANAYİ
     elif current_state == "SUB_MENU_4":
         if incoming_msg == "2":
-            user_states[session_id] = "AWAITING_INFO"
+            user_states[session_id]["state"] = "AWAITING_INFO"
             return INFO_PROMPTS["sanayi_teklif"]
 
     # 5. GALERİ
     elif current_state == "SUB_MENU_5":
         if incoming_msg == "1":
-            user_states[session_id] = "AWAITING_INFO"
+            user_states[session_id]["state"] = "AWAITING_INFO"
             return INFO_PROMPTS["galeri_arac"]
         elif incoming_msg == "4":
-            user_states[session_id] = "SELECT_DATE"
+            user_states[session_id]["state"] = "SELECT_DATE"
             return DATE_MENU
 
     # --- VERİ TOPLAMA (Müşteri bilgi girdiğinde) ---
     if current_state == "AWAITING_INFO":
         # Burada müşterinin yazdığı veriyi (incoming_msg) gerçek sistemde veritabanına veya Telegram'a atacağız.
-        user_states[session_id] = "COMPLETED"
+        user_states[session_id]["state"] = "COMPLETED"
         return "✅ Bilgileriniz başarıyla alınmıştır. Uzman ekibimiz sizinle en kısa sürede iletişime geçecektir.\n\nAna menüye dönmek için 'menü' yazabilirsiniz."
 
     # --- ORTAK RANDEVU SİSTEMİ (Tüm sektörler buraya akar) ---
     if current_state == "SELECT_DATE":
         if incoming_msg in ["1", "2"]:
-            user_states[session_id] = f"SELECT_TIME_{incoming_msg}"
+            user_states[session_id]["state"] = f"SELECT_TIME_{incoming_msg}"
             return TIME_MENU
         else:
             return "Lütfen geçerli bir gün seçin (1-2).\n\n" + DATE_MENU
@@ -224,7 +276,7 @@ def handle_message(session_id, incoming_msg):
             # Google Calendar'a ekle!
             success = create_calendar_event(date_choice, incoming_msg, session_id)
             
-            user_states[session_id] = "COMPLETED" 
+            user_states[session_id]["state"] = "COMPLETED" 
             if success:
                 return "✅ Harika! Randevunuz başarıyla oluşturuldu.\n\nAna menüye dönmek için 'menü' yazabilirsiniz."
             else:
@@ -233,6 +285,7 @@ def handle_message(session_id, incoming_msg):
             return "Lütfen geçerli bir saat seçin (1-4).\n\n" + TIME_MENU
 
     return "Ana menüye dönmek için 'menü' yazabilirsiniz."
+
 
 
 
