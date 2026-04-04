@@ -147,8 +147,12 @@ def create_calendar_event(date_choice, time_choice, session_id):
 def handle_message(session_id, incoming_msg):
     incoming_msg = incoming_msg.strip()
     
+    # RESET VE YENİ KULLANICI KONTROLÜ
+    is_new_user = session_id not in user_states
+    is_reset_msg = incoming_msg.lower() in ["menü", "menu", "merhaba", "selam"]
+
     # KULLANICIYI KAYDETME VE SON AKTİVİTEYİ GÜNCELLEME
-    if session_id not in user_states:
+    if is_new_user:
         user_states[session_id] = {
             "state": "MAIN_MENU",
             "last_active": datetime.datetime.now(),
@@ -164,8 +168,12 @@ def handle_message(session_id, incoming_msg):
                 "f1_sent": False,
                 "f2_sent": False
             }
-        else:
-            user_states[session_id]["last_active"] = datetime.datetime.now()
+        user_states[session_id]["last_active"] = datetime.datetime.now()
+
+    # Eğer yeni kullanıcıysa veya reset kelimesi yazdıysa ANA MENÜ'ye zorla
+    if is_new_user or is_reset_msg:
+        user_states[session_id]["state"] = "MAIN_MENU"
+        return MAIN_MENU
 
     # Artık current_state'i sözlüğün içinden okuyoruz
     current_state = user_states[session_id]["state"]
