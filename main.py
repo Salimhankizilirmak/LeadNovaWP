@@ -31,8 +31,8 @@ CREDENTIALS_FILE = 'service_account.json'
 # (Örn: 'leadnova@gmail.com')
 CALENDAR_ID = 'salimhankizilirmak@gmail.com' 
 
-# Kullanıcı durumları
-user_states = {}
+# Kullanıcı durumları (Artık veritabanından yönetiliyor)
+# user_states = {}
 
 def get_db_connection():
     # Supabase'e bağlanır ve verileri sözlük (dict) formatında döndürür
@@ -98,6 +98,34 @@ def get_all_clients():
     conn.close()
     return clients
 
+# --- VERİTABANI HAFIZA FONKSİYONLARI ---
+def get_user_state(session_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM user_states WHERE session_id = %s", (session_id,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    return user
+
+def update_user_state(session_id, state, f1_sent=False, f2_sent=False):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    now = datetime.datetime.now()
+    cur.execute("""
+        INSERT INTO user_states (session_id, state, last_active, f1_sent, f2_sent)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (session_id) 
+        DO UPDATE SET 
+            state = EXCLUDED.state,
+            last_active = EXCLUDED.last_active,
+            f1_sent = EXCLUDED.f1_sent,
+            f2_sent = EXCLUDED.f2_sent;
+    """, (session_id, state, now, f1_sent, f2_sent))
+    conn.commit()
+    cur.close()
+    conn.close()
+
 MAIN_MENU = """*LeadNova Systems’e hoş geldiniz!* 🚀
 
 Size en hızlı şekilde yardımcı olabilmemiz için lütfen sektörünüzü seçin:
@@ -134,28 +162,32 @@ def send_proactive_message(session_id, message_text):
     print(f"\n[🚀 OTOMATİK TAKİP MESAJI GÖNDERİLDİ] -> {session_id}")
     print(f"Mesaj: {message_text}\n")
 
-def check_followups():
-    """
-    Arka planda her dakika çalışıp müşterilerin son etkileşim sürelerini kontrol eden beyin.
-    """
-    now = datetime.datetime.now()
-    for session_id, data in list(user_states.items()):
-        # Sadece sözlük (dict) yapısına geçirdiğimiz kullanıcıları kontrol et
-        if isinstance(data, dict):
-            last_active = data.get("last_active")
-            if not last_active: continue
-            
-            # Eğer müşteri 1 saat (3600 saniye) boyunca yazmadıysa ve 1. takip atılmadıysa
-            if not data.get("f1_sent") and (now - last_active).total_seconds() >= 3600:
-                send_proactive_message(session_id, FOLLOWUP_1_HOUR)
-                data["f1_sent"] = True
-                
-            # Eğer müşteri 1 gün (86400 saniye) boyunca yazmadıysa ve 2. takip atılmadıysa
-            elif not data.get("f2_sent") and (now - last_active).total_seconds() >= 86400:
-                send_proactive_message(session_id, FOLLOWUP_1_DAY)
-                data["f2_sent"] = True
-
 # Zamanlayıcıya bu kontrol görevini her 1 dakikada bir yapmasını söylüyoruz
+# Zamanlayıcıyı (Follow-Up) veritabanına bağladık
+def check_followups():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM user_states")
+    users = cur.fetchall()
+    now = datetime.datetime.now()
+    
+    for user in users:
+        session_id = user['session_id']
+        last_active = user['last_active']
+        
+        # Eğer müşteri 1 saat boyunca yazmadıysa
+        if not user['f1_sent'] and (now - last_active).total_seconds() >= 3600:
+            send_proactive_message(session_id, FOLLOWUP_1_HOUR)
+            update_user_state(session_id, user['state'], f1_sent=True, f2_sent=user['f2_sent'])
+            
+        # Eğer müşteri 1 gün boyunca yazmadıysa
+        elif not user['f2_sent'] and (now - last_active).total_seconds() >= 86400:
+            send_proactive_message(session_id, FOLLOWUP_1_DAY)
+            update_user_state(session_id, user['state'], f1_sent=user['f1_sent'], f2_sent=True)
+            
+    cur.close()
+    conn.close()
+
 scheduler.add_job(check_followups, 'interval', minutes=1)
 
 
@@ -221,48 +253,35 @@ def create_calendar_event(date_choice, time_choice, session_id):
         print(f"Takvim oluşturma hatası: {e}")
         return False
 
+# Mesaj işleyiciyi veritabanına bağladık
 def handle_message(session_id, incoming_msg):
     incoming_msg = incoming_msg.strip()
     
-    # RESET VE YENİ KULLANICI KONTROLÜ
-    is_new_user = session_id not in user_states
+    # Supabase'den kullanıcıyı çek
+    user = get_user_state(session_id)
+    
+    is_new_user = not user
     is_reset_msg = incoming_msg.lower() in ["menü", "menu", "merhaba", "selam"]
 
-    # KULLANICIYI KAYDETME VE SON AKTİVİTEYİ GÜNCELLEME
-    if is_new_user:
-        user_states[session_id] = {
-            "state": "MAIN_MENU",
-            "last_active": datetime.datetime.now(),
-            "f1_sent": False,
-            "f2_sent": False
-        }
-    else:
-        # Eski basit string yapısını yeni sözlük yapısına çevir (Hata almamak için)
-        if not isinstance(user_states[session_id], dict):
-            user_states[session_id] = {
-                "state": user_states[session_id],
-                "last_active": datetime.datetime.now(),
-                "f1_sent": False,
-                "f2_sent": False
-            }
-        user_states[session_id]["last_active"] = datetime.datetime.now()
-
-    # Eğer yeni kullanıcıysa veya reset kelimesi yazdıysa ANA MENÜ'ye zorla
+    # Kullanıcı ilk defa yazıyorsa veya resetlemek istediyse
     if is_new_user or is_reset_msg:
-        user_states[session_id]["state"] = "MAIN_MENU"
+        update_user_state(session_id, "MAIN_MENU")
         return MAIN_MENU
 
-    # Artık current_state'i sözlüğün içinden okuyoruz
-    current_state = user_states[session_id]["state"]
+    current_state = user["state"]
+
+    # Durum güncelleyici yardımcı fonksiyon
+    def set_state(new_state):
+        update_user_state(session_id, new_state, user['f1_sent'], user['f2_sent'])
 
     if incoming_msg == "0":
-        user_states[session_id]["state"] = "LIVE_SUPPORT"
+        set_state("LIVE_SUPPORT")
         return "Sizi müşteri temsilcimize aktarıyorum. Lütfen bekleyin... 🎧"
 
     # --- ANA MENÜ ---
     if current_state == "MAIN_MENU":
         if incoming_msg in SUB_MENUS:
-            user_states[session_id]["state"] = f"SUB_MENU_{incoming_msg}"
+            set_state(f"SUB_MENU_{incoming_msg}")
             return SUB_MENUS[incoming_msg]
         else:
             return "Lütfen geçerli bir numara tuşlayın (1-5).\n\n" + MAIN_MENU
@@ -272,61 +291,61 @@ def handle_message(session_id, incoming_msg):
     # 1. EMLAK
     if current_state == "SUB_MENU_1":
         if incoming_msg in ["1", "2", "3"]:
-            user_states[session_id]["state"] = "AWAITING_INFO"
+            set_state("AWAITING_INFO")
             return INFO_PROMPTS["emlak_satilik"]
         elif incoming_msg == "5":
-            user_states[session_id]["state"] = "SELECT_DATE"
+            set_state("SELECT_DATE")
             return DATE_MENU
             
     # 2. GÜZELLİK MERKEZİ
     elif current_state == "SUB_MENU_2":
         if incoming_msg == "1": # Lazer alt menüsü
-            user_states[session_id]["state"] = "SUB_MENU_LAZER"
+            set_state("SUB_MENU_LAZER")
             return "✨ Lazer epilasyon hakkında:\n1 - Fiyat bilgisi al\n2 - Randevu oluştur\n\n🎁 Bugün randevu oluşturan müşterilerimize özel indirim uygulanmaktadır."
         elif incoming_msg == "7":
-            user_states[session_id]["state"] = "SELECT_DATE"
+            set_state("SELECT_DATE")
             return DATE_MENU
             
     # 2.1 GÜZELLİK MERKEZİ -> LAZER ALT MENÜSÜ
     elif current_state == "SUB_MENU_LAZER":
         if incoming_msg == "2":
-            user_states[session_id]["state"] = "SELECT_DATE"
+            set_state("SELECT_DATE")
             return DATE_MENU
 
     # 3. KLİNİK
     elif current_state == "SUB_MENU_3":
         if incoming_msg == "4":
-            user_states[session_id]["state"] = "AWAITING_INFO"
+            set_state("AWAITING_INFO")
             return INFO_PROMPTS["klinik_bilgi"]
         elif incoming_msg == "5":
-            user_states[session_id]["state"] = "SELECT_DATE"
+            set_state("SELECT_DATE")
             return DATE_MENU
 
     # 4. SANAYİ
     elif current_state == "SUB_MENU_4":
         if incoming_msg == "2":
-            user_states[session_id]["state"] = "AWAITING_INFO"
+            set_state("AWAITING_INFO")
             return INFO_PROMPTS["sanayi_teklif"]
 
     # 5. GALERİ
     elif current_state == "SUB_MENU_5":
         if incoming_msg == "1":
-            user_states[session_id]["state"] = "AWAITING_INFO"
+            set_state("AWAITING_INFO")
             return INFO_PROMPTS["galeri_arac"]
         elif incoming_msg == "4":
-            user_states[session_id]["state"] = "SELECT_DATE"
+            set_state("SELECT_DATE")
             return DATE_MENU
 
     # --- VERİ TOPLAMA (Müşteri bilgi girdiğinde) ---
     if current_state == "AWAITING_INFO":
         # Burada müşterinin yazdığı veriyi (incoming_msg) gerçek sistemde veritabanına veya Telegram'a atacağız.
-        user_states[session_id]["state"] = "COMPLETED"
+        set_state("COMPLETED")
         return "✅ Bilgileriniz başarıyla alınmıştır. Uzman ekibimiz sizinle en kısa sürede iletişime geçecektir.\n\nAna menüye dönmek için 'menü' yazabilirsiniz."
 
     # --- ORTAK RANDEVU SİSTEMİ (Tüm sektörler buraya akar) ---
     if current_state == "SELECT_DATE":
         if incoming_msg in ["1", "2"]:
-            user_states[session_id]["state"] = f"SELECT_TIME_{incoming_msg}"
+            set_state(f"SELECT_TIME_{incoming_msg}")
             return TIME_MENU
         else:
             return "Lütfen geçerli bir gün seçin (1-2).\n\n" + DATE_MENU
@@ -361,7 +380,7 @@ def handle_message(session_id, incoming_msg):
             # Google Calendar'a ekle!
             success = create_calendar_event(date_choice, incoming_msg, session_id)
             
-            user_states[session_id]["state"] = "COMPLETED" 
+            set_state("COMPLETED") 
             if success:
                 return "✅ Harika! Randevunuz başarıyla oluşturuldu.\n\nAna menüye dönmek için 'menü' yazabilirsiniz."
             else:
