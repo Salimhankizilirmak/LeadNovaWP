@@ -10,6 +10,7 @@ import time
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+import requests # Gerçek WhatsApp API ile konuşmak için
 
 # .env dosyasındaki şifreleri yükle
 load_dotenv()
@@ -98,6 +99,16 @@ def get_all_clients():
     conn.close()
     return clients
 
+def get_client_by_phone_id(phone_number_id):
+    # Gelen mesajın HANGİ müşteriye ait olduğunu veritabanından bulur
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM clients WHERE phone_number_id = %s AND is_active = TRUE", (phone_number_id,))
+    client = cur.fetchone()
+    cur.close()
+    conn.close()
+    return client
+
 # --- VERİTABANI HAFIZA FONKSİYONLARI ---
 def get_user_state(session_id):
     conn = get_db_connection()
@@ -154,13 +165,41 @@ FOLLOWUP_1_DAY = "🎁 Bugüne özel fırsatlarımız devam ediyor.\nBilgi almak
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.start()
 
+def send_whatsapp_message(to_number, text_message, token, phone_number_id):
+    """
+    Kendi numarasından bağımsız olarak müşterinin özel WhatsApp hattından mesaj gönderir.
+    """
+    url = f"https://graph.facebook.com/v17.0/{phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {"body": text_message}
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        return response.json()
+    except Exception as e:
+        print(f"WhatsApp mesaj gönderme hatası: {e}")
+        return None
+
 def send_proactive_message(session_id, message_text):
     """
-    Bu fonksiyon ileride doğrudan Meta (WhatsApp) API'sine bağlanacak.
-    Şu an web demosu kullandığımız için konsola logluyoruz.
+    Takip mesajlarını gönderen fonksiyon. Multi-tenant yapısına uygun hale getirildi.
     """
-    print(f"\n[🚀 OTOMATİK TAKİP MESAJI GÖNDERİLDİ] -> {session_id}")
-    print(f"Mesaj: {message_text}\n")
+    # session_id formatımız: {client_phone_id}_{customer_phone}
+    if "_" in session_id:
+        client_phone_id, customer_phone = session_id.split("_")
+        client = get_client_by_phone_id(client_phone_id)
+        if client:
+            send_whatsapp_message(customer_phone, message_text, client['whatsapp_token'], client_phone_id)
+            print(f"\n[🚀 OTOMATİK TAKİP MESAJI GÖNDERİLDİ] -> {customer_phone}")
+    else:
+        print(f"\n[🚀 LOG] Web demosu takip mesajı: {message_text}\n")
 
 # Zamanlayıcıya bu kontrol görevini her 1 dakikada bir yapmasını söylüyoruz
 # Zamanlayıcıyı (Follow-Up) veritabanına bağladık
@@ -411,19 +450,65 @@ def web_chat():
     response_text = handle_message(session_id, incoming_msg)
     return jsonify({"status": "success", "response": response_text}), 200
 
-# --- GERÇEK WHATSAPP (META API) İÇİN ROTAMIZ ---
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "leadnova_gizli_2026") # Meta Developer Dashboard'da kullanılacak
+
+# --- META WEBHOOK DOĞRULAMA (GET İSTEĞİ) ---
+@app.route('/webhook', methods=['GET'])
+def verify_webhook():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode and token:
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            print("WEBHOOK DOĞRULANDI! ✅")
+            return challenge, 200
+        else:
+            return "Yetkisiz işlem", 403
+    return "Hatalı İstek", 400
+
+# --- GERÇEK WHATSAPP MESAJLARINI ALMA VE İŞLEME (POST İSTEĞİ) ---
 @app.route('/webhook', methods=['POST'])
-def webhook():
+def whatsapp_webhook():
     data = request.json
-    phone_number = data.get('sender')
-    incoming_msg = data.get('message')
     
-    if not phone_number or not incoming_msg:
-        return jsonify({"status": "error"}), 400
-        
-    response_text = handle_message(phone_number, incoming_msg)
-    print(f"Response for {phone_number}: {response_text}")
-    return jsonify({"status": "success", "response": response_text}), 200
+    # Meta'dan mı geldi kontrol et
+    if "object" in data and data["object"] == "whatsapp_business_account":
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                
+                # Bu mesaj HANGİ firmaya geldi?
+                metadata = value.get("metadata", {})
+                client_phone_id = metadata.get("phone_number_id")
+                
+                if "messages" in value and client_phone_id:
+                    # Veritabanından o firmayı bul
+                    client = get_client_by_phone_id(client_phone_id)
+                    
+                    if not client:
+                        print(f"Kayıtlı olmayan numaraya mesaj geldi: {client_phone_id}")
+                        continue
+                    
+                    # Müşteri verilerini al
+                    message = value["messages"][0]
+                    customer_phone = message["from"] 
+                    
+                    # Session ID oluştur: Firmayı ve müşteriyi benzersiz yap
+                    session_id = f"{client_phone_id}_{customer_phone}"
+                    
+                    if message["type"] == "text":
+                        incoming_msg = message["text"]["body"]
+                        
+                        # Botun vereceği cevabı hesapla
+                        response_text = handle_message(session_id, incoming_msg)
+                        
+                        # Cevabı o firmaya özel WhatsApp Token'ı ile gerçek WhatsApp'a gönder!
+                        send_whatsapp_message(customer_phone, response_text, client['whatsapp_token'], client_phone_id)
+                        
+        return jsonify({"status": "success"}), 200
+    else:
+        return jsonify({"status": "error"}), 404
 
 # --- ADMIN PANELİ (GİRİŞ SAYFASI) ---
 @app.route('/admin/login', methods=['GET', 'POST'])
