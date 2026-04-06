@@ -1,5 +1,5 @@
 # LeadNova uçuşa hazır! 🚀
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, render_template_string, session, redirect, url_for
 import os
 import datetime
 from datetime import timezone, timedelta
@@ -7,9 +7,22 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from apscheduler.schedulers.background import BackgroundScheduler
 import time
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
 
+# .env dosyasındaki şifreleri yükle
+load_dotenv()
+
+# Veritabanı URL'sini al
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 app = Flask(__name__)
+# Admin panelinde oturumları şifrelemek için rastgele bir güvenlik anahtarı
+app.secret_key = "leadnova_cok_gizli_anahtar_2026" 
+
+# Senin Admin panele girmek için kullanacağın ana şifre (Bunu istediğin gibi değiştir)
+ADMIN_PASSWORD = "123" 
 
 # --- GOOGLE TAKVİM AYARLARI ---
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -20,6 +33,70 @@ CALENDAR_ID = 'salimhankizilirmak@gmail.com'
 
 # Kullanıcı durumları
 user_states = {}
+
+def get_db_connection():
+    # Supabase'e bağlanır ve verileri sözlük (dict) formatında döndürür
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+def init_db():
+    # Sistem her başladığında çalışır, tablolar yoksa otomatik oluşturur
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # 1. Müşteriler (Firmalar) Tablosu
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS clients (
+            client_id SERIAL PRIMARY KEY,
+            company_name VARCHAR(255) NOT NULL,
+            phone_number_id VARCHAR(100) UNIQUE NOT NULL,
+            whatsapp_token TEXT NOT NULL,
+            industry VARCHAR(50) NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE
+        );
+    """)
+    
+    # 2. Kullanıcıların Durum Tablosu (Botla konuşanların hafızası)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_states (
+            session_id VARCHAR(100) PRIMARY KEY,
+            state VARCHAR(100) NOT NULL,
+            last_active TIMESTAMP NOT NULL,
+            f1_sent BOOLEAN DEFAULT FALSE,
+            f2_sent BOOLEAN DEFAULT FALSE
+        );
+    """)
+    
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# Uygulama başlarken veritabanı tablolarını hazırla
+init_db()
+
+def add_new_client(company_name, phone_number_id, whatsapp_token, industry):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO clients (company_name, phone_number_id, whatsapp_token, industry, is_active)
+            VALUES (%s, %s, %s, %s, TRUE)
+        """, (company_name, phone_number_id, whatsapp_token, industry))
+        conn.commit()
+    except Exception as e:
+        print(f"Müşteri ekleme hatası: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+
+def get_all_clients():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM clients ORDER BY client_id DESC")
+    clients = cur.fetchall()
+    cur.close()
+    conn.close()
+    return clients
 
 MAIN_MENU = """*LeadNova Systems’e hoş geldiniz!* 🚀
 
@@ -328,6 +405,121 @@ def webhook():
     response_text = handle_message(phone_number, incoming_msg)
     print(f"Response for {phone_number}: {response_text}")
     return jsonify({"status": "success", "response": response_text}), 200
+
+# --- ADMIN PANELİ (GİRİŞ SAYFASI) ---
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == ADMIN_PASSWORD:
+            session['admin_logged_in'] = True
+            return redirect(url_for('admin_dashboard'))
+        else:
+            return "Hatalı Şifre! <a href='/admin/login'>Tekrar Dene</a>"
+            
+    # Giriş formu HTML'i (Hızlı olması için doğrudan kodun içine gömüyoruz)
+    login_html = """
+    <html><head><title>LeadNova Admin Girişi</title></head>
+    <body style="font-family: Arial; background-color: #f0f2f5; display:flex; justify-content:center; align-items:center; height:100vh;">
+        <div style="background:white; padding:40px; border-radius:10px; box-shadow:0 4px 10px rgba(0,0,0,0.1); text-align:center;">
+            <h2>🚀 LeadNova Admin</h2>
+            <form method="POST">
+                <input type="password" name="password" placeholder="Yönetici Şifresi" required style="padding:10px; width:100%; margin-bottom:15px; border:1px solid #ccc; border-radius:5px;"><br>
+                <button type="submit" style="padding:10px 20px; background-color:#008f68; color:white; border:none; border-radius:5px; cursor:pointer; width:100%;">Giriş Yap</button>
+            </form>
+        </div>
+    </body></html>
+    """
+    return render_template_string(login_html)
+
+# --- ADMIN PANELİ (DASHBOARD VE MÜŞTERİ EKLEME) ---
+@app.route('/admin', methods=['GET', 'POST'])
+def admin_dashboard():
+    # Güvenlik kontrolü: Şifre girilmemişse login sayfasına at
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin_login'))
+
+    if request.method == 'POST':
+        # Formdan gelen yeni müşteri verileri
+        c_name = request.form.get('company_name')
+        c_phone_id = request.form.get('phone_number_id')
+        c_token = request.form.get('whatsapp_token')
+        c_industry = request.form.get('industry')
+        
+        if c_name and c_phone_id and c_token and c_industry:
+            add_new_client(c_name, c_phone_id, c_token, c_industry)
+            return redirect(url_for('admin_dashboard'))
+
+    # Mevcut müşterileri veritabanından çek
+    clients = get_all_clients()
+    
+    # Modern Dashboard HTML'i
+    dashboard_html = """
+    <html><head><title>LeadNova Müşteri Yönetimi</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: auto; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #008f68; color: white; }
+        input, select, button { padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 5px; width: calc(100% - 22px); }
+        button { background-color: #008f68; color: white; cursor: pointer; border: none; font-weight: bold; width: 100%; }
+        .logout { display: inline-block; margin-top: 10px; color: #d9534f; text-decoration: none; font-weight: bold; }
+    </style>
+    </head><body>
+    <div class="container">
+        <h1 style="color:#333;">🚀 LeadNova Yönetim Merkezi</h1>
+        
+        <div class="card">
+            <h3>➕ Yeni Müşteri Ekle</h3>
+            <form method="POST" style="display: flex; flex-wrap: wrap; gap: 10px;">
+                <div style="flex: 1; min-width: 200px;"><input type="text" name="company_name" placeholder="Firma Adı (Örn: Ahmet Emlak)" required></div>
+                <div style="flex: 1; min-width: 200px;"><input type="text" name="phone_number_id" placeholder="Meta Phone ID" required></div>
+                <div style="flex: 1; min-width: 200px;"><input type="text" name="whatsapp_token" placeholder="WhatsApp API Token" required></div>
+                <div style="flex: 1; min-width: 200px;">
+                    <select name="industry" required>
+                        <option value="">-- Sektör Seç --</option>
+                        <option value="1">Emlak (1)</option>
+                        <option value="2">Güzellik Merkezi (2)</option>
+                        <option value="3">Klinik (3)</option>
+                        <option value="4">Sanayi (4)</option>
+                        <option value="5">Galeri (5)</option>
+                    </select>
+                </div>
+                <div style="flex: 100%;"><button type="submit">Sisteme Ekle ve Botu Başlat</button></div>
+            </form>
+        </div>
+
+        <div class="card">
+            <h3>📋 Aktif Müşteriler</h3>
+            <table>
+                <tr>
+                    <th>ID</th><th>Firma Adı</th><th>Phone ID</th><th>Sektör</th><th>Durum</th>
+                </tr>
+                {% for client in clients %}
+                <tr>
+                    <td>{{ client.client_id }}</td>
+                    <td><strong>{{ client.company_name }}</strong></td>
+                    <td>{{ client.phone_number_id }}</td>
+                    <td>Sektör {{ client.industry }}</td>
+                    <td style="color:green;">Aktif ✅</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" style="text-align:center;">Henüz müşteri bulunmuyor.</td></tr>
+                {% endfor %}
+            </table>
+        </div>
+        <a href="/admin/logout" class="logout">Çıkış Yap</a>
+    </div>
+    </body></html>
+    """
+    return render_template_string(dashboard_html, clients=clients)
+
+@app.route('/admin/logout')
+def admin_logout():
+    session.pop('admin_logged_in', None)
+    return redirect(url_for('admin_login'))
 
 if __name__ == '__main__':
     # Render'da çalışırken PORT environment variable'ını okumamız gerekir
